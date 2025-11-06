@@ -1,19 +1,27 @@
-trigger:
-  branches:
-    include:
-    - main
+# Docker
+# Build a Docker image
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
 
-pr: none
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  tag: '$(Build.BuildId)'
 
 pool:
-  name: Default
-  demands:
-  - Agent.Name -equals AgentTokeenCP4   # força cair no seu self-hosted
+  name: 'Default' 
 
 stages:
 - stage: Build
+  displayName: Build image
   jobs:
   - job: Build
+    displayName: Build
+    pool:
+      name: 'Default'
     steps:
     - task: Docker@2
       displayName: Build an image
@@ -21,4 +29,4 @@ stages:
         command: build
         dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
         tags: |
-          $(Build.BuildId)
+          $(tag)
