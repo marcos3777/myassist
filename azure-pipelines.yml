@@ -22,7 +22,7 @@ stages:
       displayName: Login no ACR
       inputs:
         command: login
-        containerRegistry: 'SC-ACR'       # Service connection do ACR
+        containerRegistry: ''       # Service connection do ACR
 
     - task: Docker@2
       displayName: Build
