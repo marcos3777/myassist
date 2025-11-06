@@ -5,45 +5,24 @@ pool:
   name: 'Default'   # seu agente privado
 
 variables:
+  appName: 'myassist'
   tag: '$(Build.BuildId)'
 
-stages:
-- stage: BuildAndDeploy
-  jobs:
-  - job: DoAll
-    steps:
-    - script: |
-        docker login $(acrServer) -u $(acrName) -p $(acrPassword)
-      displayName: 'Docker login no ACR'
+steps:
+- task: Docker@2
+  displayName: Build image (no push)
+  inputs:
+    command: build
+    dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+    repository: '$(appName)'      # resulta em: myassist:$(tag)
+    tags: |
+      $(tag)
 
-    - script: |
-        IMAGE="$(acrServer)/fiap/$(appName):$(tag)"
-        echo "IMAGE=$IMAGE"
-        docker build -f $(Build.SourcesDirectory)/Dockerfile -t "$IMAGE" $(Build.SourcesDirectory)
-        docker push "$IMAGE"
-      displayName: 'Build e Push'
+# Opcional: salvar a imagem como artefato para a Release consumir
+- script: |
+    docker save $(appName):$(tag) -o image.tar
+  displayName: 'Empacotar imagem em TAR'
 
-    # --- SIMPLES: sem Service Connection ---
-    - script: |
-        set -e
-        az version
-        az login --service-principal -u "$(spAppId)" -p "$(spPassword)" --tenant "$(spTenant)"
-        az account set --subscription "$(subscriptionId)"
-
-        IMAGE="$(acrServer)/fiap/$(appName):$(tag)"
-        echo "Deploying IMAGE=$IMAGE"
-
-        az container delete -g "$(resourceGroup)" -n "$(appName)" --yes || true
-
-        az container create \
-          -g "$(resourceGroup)" \
-          -n "$(appName)" \
-          --image "$IMAGE" \
-          --registry-login-server "$(acrServer)" \
-          --registry-username "$(acrName)" \
-          --registry-password "$(acrPassword)" \
-          --cpu 1 --memory 1 \
-          --ports 8080 \
-          --ip-address Public \
-          --dns-name-label "$(appName)"
-      displayName: 'Deploy no ACI (az login via SP)'
+- publish: image.tar
+  artifact: docker-image
+  displayName: 'Publicar artefato da imagem'
