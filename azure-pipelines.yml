@@ -1,32 +1,89 @@
-# Docker
-# Build a Docker image
-# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
-
 trigger:
 - main
-
-resources:
-- repo: self
-
-variables:
-  tag: '$(Build.BuildId)'
-
+ 
 pool:
-  name: 'Default' 
-
+  name: 'Default'   # seu agente self-hosted
+ 
+variables:
+  RG: 'rg-fiap'
+  LOCATION: 'brazilsouth'
+  ACR_NAME: 'contaimarcoser'                       # nome do ACR (sem .azurecr.io)
+  REPO_NAME: 'fiap/myassist'
+  IMAGE_TAG: '$(Build.BuildId)'
+  ACR_LOGIN_SERVER: '$(ACR_NAME).azurecr.io'
+  IMAGE_FULL: '$(ACR_LOGIN_SERVER)/$(REPO_NAME):$(IMAGE_TAG)'
+ 
 stages:
-- stage: Build
-  displayName: Build image
+- stage: BuildPush
   jobs:
-  - job: Build
-    displayName: Build
-    pool:
-      name: 'Default'
+  - job: DockerBuildPush
     steps:
     - task: Docker@2
-      displayName: Build an image
+      displayName: Login no ACR
+      inputs:
+        command: login
+        containerRegistry: 'SC-ACR'       # Service connection do ACR
+
+    - task: Docker@2
+      displayName: Build
       inputs:
         command: build
         dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        repository: '$(REPO_NAME)'
+        containerRegistry: 'SC-ACR'
         tags: |
-          $(tag)
+          $(IMAGE_TAG)
+
+    - task: Docker@2
+      displayName: Push
+      inputs:
+        command: push
+        repository: '$(REPO_NAME)'
+        containerRegistry: 'SC-ACR'
+        tags: |
+          $(IMAGE_TAG)
+ 
+- stage: DeployACI
+  dependsOn: BuildPush
+  jobs:
+  - job: Deploy
+    steps:
+    - task: AzureCLI@2
+      displayName: Criar/atualizar ACI
+      inputs:
+        azureSubscription: 'SC-Azure'      # Service connection da assinatura
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          az account show 1>/dev/null
+ 
+          RG='$(RG)'
+          LOCATION='$(LOCATION)'
+          ACI_NAME='myassist-aci'
+          IMAGE='$(IMAGE_FULL)'
+ 
+          # (opção 1) usar credenciais do ACR derivadas do service connection
+          ACR_LOGIN_SERVER='$(ACR_LOGIN_SERVER)'
+          ACR_USER=$(az acr credential show -n $(ACR_NAME) --query username -o tsv)
+          ACR_PASS=$(az acr credential show -n $(ACR_NAME) --query "passwords[0].value" -o tsv)
+ 
+          az group create -n "$RG" -l "$LOCATION" 1>/dev/null
+ 
+          # cria ou atualiza o ACI
+          if az container show -g "$RG" -n "$ACI_NAME" >/dev/null 2>&1; then
+            az container delete -g "$RG" -n "$ACI_NAME" --yes
+          fi
+ 
+          az container create \
+            -g "$RG" -n "$ACI_NAME" \
+            --image "$IMAGE" \
+            --cpu 1 --memory 1 \
+            --registry-login-server "$ACR_LOGIN_SERVER" \
+            --registry-username "$ACR_USER" \
+            --registry-password "$ACR_PASS" \
+            --ports 8080 \
+            --dns-name-label myassist-$RANDOM \
+            --restart-policy Always
+ 
+          echo "✅ Deploy OK com a imagem: $IMAGE"
