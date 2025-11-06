@@ -1,32 +1,54 @@
-# Docker 
-# Build a Docker image
-# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
-
+# Build + Push (ACR) + Deploy (ACI) — simples
 trigger:
 - main
 
-resources:
-- repo: self
+pool:
+  name: 'Default'   # seu agente self-hosted
 
 variables:
   tag: '$(Build.BuildId)'
 
-pool:
-  name: 'Default'
-
 stages:
-- stage: Build
-  displayName: Build image
+- stage: BuildAndDeploy
   jobs:
-  - job: Build
-    displayName: Build
-    pool:
-      name: 'Default'
+  - job: DoAll
     steps:
-    - task: Docker@2
-      displayName: Build an image
+    # 1) Login no ACR
+    - script: |
+        docker login $(acrServer) -u $(acrName) -p $(acrPassword)
+      displayName: 'Docker login no ACR'
+
+    # 2) Build + Tag + Push
+    - script: |
+        IMAGE="$(acrServer)/fiap/$(appName):$(tag)"
+        echo "IMAGE=$IMAGE"
+        docker build -f $(Build.SourcesDirectory)/Dockerfile -t "$IMAGE" $(Build.SourcesDirectory)
+        docker push "$IMAGE"
+      displayName: 'Build e Push da imagem'
+
+    # 3) Deploy no ACI (Azure CLI)
+    - task: AzureCLI@2
       inputs:
-        command: build
-        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
-        tags: |
-          $(tag)
+        azureSubscription: 'SC-Azure'   # seu Service Connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          IMAGE="$(acrServer)/fiap/$(appName):$(tag)"
+          echo "Deploying IMAGE=$IMAGE"
+
+          # remove o anterior se existir (ignora erro)
+          az container delete -g $(resourceGroup) -n $(appName) --yes || true
+
+          az container create \
+            -g $(resourceGroup) \
+            -n $(appName) \
+            --image "$IMAGE" \
+            --registry-login-server "$(acrServer)" \
+            --registry-username "$(acrName)" \
+            --registry-password "$(acrPassword)" \
+            --cpu 1 --memory 1 \
+            --ports 8080 \
+            --ip-address Public \
+            --dns-name-label "$(appName)"
+      displayName: 'Deploy no Azure Container Instances'
